@@ -1,0 +1,248 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>LLM Chatbot</title>
+  <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+
+  <style>
+    body {
+      margin: 0;
+      font-family: "Segoe UI", Arial, sans-serif;
+      background: #f7f7f8;
+      display: flex;
+      justify-content: center;
+      align-items: center;
+      height: 100vh;
+    }
+
+    .app {
+      display: flex;
+      width: 760px;
+      height: 600px;
+      background: #fff;
+      border-radius: 12px;
+      box-shadow: 0 10px 30px rgba(0,0,0,0.1);
+      overflow: hidden;
+    }
+
+    .sidebar {
+      width: 220px;
+      background: #f1f1f1;
+      padding: 12px;
+      border-right: 1px solid #ddd;
+      overflow-y: auto;
+    }
+
+    .recent {
+      background: #fff;
+      padding: 8px;
+      margin-bottom: 6px;
+      border-radius: 6px;
+      cursor: pointer;
+      font-size: 13px;
+    }
+
+    .recent:hover {
+      background: #e9ecef;
+    }
+
+    .chat {
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+    }
+
+    .header {
+      background: #0b5ed7;
+      color: white;
+      padding: 14px;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+
+    .messages {
+      flex: 1;
+      padding: 15px;
+      overflow-y: auto;
+      background: #f7f7f8;
+    }
+
+    .message {
+      max-width: 80%;
+      padding: 10px 14px;
+      margin-bottom: 12px;
+      border-radius: 12px;
+      font-size: 14px;
+    }
+
+    .user {
+      background: #0b5ed7;
+      color: white;
+      margin-left: auto;
+    }
+
+    .bot {
+      background: #fff;
+      border: 1px solid #ddd;
+    }
+
+    .typing {
+      font-style: italic;
+      color: #666;
+    }
+
+    .input {
+      display: flex;
+      padding: 10px;
+      border-top: 1px solid #ddd;
+    }
+
+    input {
+      flex: 1;
+      padding: 10px;
+      border-radius: 20px;
+      border: 1px solid #ccc;
+    }
+
+    button {
+      margin-left: 8px;
+      padding: 10px 16px;
+      border-radius: 20px;
+      border: none;
+      background: #0b5ed7;
+      color: white;
+      cursor: pointer;
+    }
+  </style>
+</head>
+
+<body>
+<div class="app">
+  <div class="sidebar">
+    <b>Recent Chats</b>
+    <div id="recentList"></div>
+  </div>
+
+  <div class="chat">
+    <div class="header">
+      LLM Chatbot
+      <button onclick="clearChat()">Clear</button>
+    </div>
+
+    <div class="messages" id="messages"></div>
+
+    <div class="input">
+      <input id="userInput" placeholder="Type a message..."
+             onkeydown="if(event.key==='Enter') sendMessage()" />
+      <button onclick="sendMessage()">Send</button>
+    </div>
+  </div>
+</div>
+
+<script>
+  let sessionId = localStorage.getItem("sessionId");
+  let typingDiv = null;
+
+  async function sendMessage() {
+    const input = document.getElementById("userInput");
+    const message = input.value.trim();
+    if (!message) return;
+
+    addMessage(message, "user");
+    input.value = "";
+    showTyping();
+
+    const response = await fetch("/chat", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        ...(sessionId && { "x-session-id": sessionId })
+      },
+      body: JSON.stringify({ message })
+    });
+
+    const newId = response.headers.get("x-session-id");
+    if (newId) {
+      sessionId = newId;
+      localStorage.setItem("sessionId", sessionId);
+    }
+
+    const data = await response.json();
+    removeTyping();
+    addMessage(data.reply, "bot");
+    loadRecentChats();
+  }
+
+  function addMessage(text, type) {
+    const div = document.createElement("div");
+    div.className = "message " + type;
+    div.innerHTML = type === "bot" ? marked.parse(text) : text;
+    messages.appendChild(div);
+    messages.scrollTop = messages.scrollHeight;
+  }
+
+  function showTyping() {
+    typingDiv = document.createElement("div");
+    typingDiv.className = "typing";
+    typingDiv.textContent = "Bot is typing...";
+    messages.appendChild(typingDiv);
+  }
+
+  function removeTyping() {
+    if (typingDiv) typingDiv.remove();
+  }
+
+  async function loadRecentChats() {
+    const res = await fetch("/recent-chats", {
+      headers: sessionId ? { "x-session-id": sessionId } : {}
+    });
+    const chats = await res.json();
+    recentList.innerHTML = "";
+
+    chats.forEach(chat => {
+      const div = document.createElement("div");
+      div.className = "recent";
+      div.textContent = chat.text.slice(0, 30) + "...";
+      div.onclick = loadExistingMessages;
+      recentList.appendChild(div);
+    });
+  }
+
+  async function loadExistingMessages() {
+    if (!sessionId) return;
+
+    const res = await fetch("/load-all", {
+      headers: { "x-session-id": sessionId }
+    });
+
+    const data = await res.json();
+    messages.innerHTML = "";
+
+    data.forEach(msg => {
+      addMessage(msg.content[0].text, msg.role === "user" ? "user" : "bot");
+    });
+
+    loadRecentChats();
+  }
+
+  async function clearChat() {
+    messages.innerHTML = "";
+    recentList.innerHTML = "";
+
+    if (sessionId) {
+      await fetch("/clear", {
+        method: "POST",
+        headers: { "x-session-id": sessionId }
+      });
+    }
+
+    localStorage.removeItem("sessionId");
+    sessionId = null;
+  }
+
+  window.onload = loadExistingMessages;
+</script>
+</body>
+</html>
